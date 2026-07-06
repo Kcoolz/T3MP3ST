@@ -98,13 +98,15 @@ Library/SDK usage, the full HTTP API, and MCP setup live in [docs/](docs/).
 
 ### Docker
 
-Run T3MP3ST API server in a container:
+Run T3MP3ST API server in a container (localhost only, not exposed externally):
 
 ```bash
 cp .env.example .env       # configure API keys
 docker compose up -d       # API → http://localhost:3333
 docker compose logs -f     # view logs
 ```
+
+**Security Note:** Container binds to `127.0.0.1:3333` - accessible only from localhost, not exposed to network.
 
 Test the API:
 ```bash

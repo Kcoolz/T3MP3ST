@@ -8,13 +8,13 @@ services:
     env_file:
       - .env
     environment:
-      - T3MP3ST_HOST=0.0.0.0
+      - T3MP3ST_HOST=127.0.0.1
       - T3MP3ST_PORT=3333
     volumes:
       - ./reports:/app/reports
       - ./evidence:/app/evidence
     ports:
-      - "3333:3333"
+      - "127.0.0.1:3333:3333"
     healthcheck:
       test: ["CMD", "node", "-e", "process.exit(0)"]
       interval: 30s
