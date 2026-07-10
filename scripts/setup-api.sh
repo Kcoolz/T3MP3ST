@@ -10,7 +10,7 @@ echo "║           T3MP3ST API KEY CONFIGURATION                   ║"
 echo "╚═══════════════════════════════════════════════════════════╝"
 echo ""
 
-ENV_FILE="$HOME/T3MP3ST/.env"
+ENV_FILE="$HOME/.t3mp3st/.env"
 mkdir -p "$(dirname "$ENV_FILE")"
 
 if [ -f "$ENV_FILE" ]; then
