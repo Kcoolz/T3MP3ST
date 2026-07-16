@@ -181,6 +181,25 @@ function isLoopbackOrigin(originHeader: string | undefined): boolean {
   }
 }
 
+// #84: a SAME-ORIGIN request — the caller's Origin (or Referer) host:port equals THIS server's
+// own Host header — is by definition not a foreign-website drive-by. It is trusted ONLY when the
+// operator has bound to a non-loopback address (see HOST_IS_LOOPBACK), i.e. they have explicitly
+// opted into network access — the same decision that stands the anti-rebinding Host guard down
+// below. That lets the operator's own LAN/custom-host UI (e.g. http://192.168.x.x:3333/ui) talk to
+// its backend instead of being rejected as cross-origin, while a foreign origin (evil.com) still
+// mismatches the Host and is refused. On a loopback bind this is never consulted: the strict
+// loopback-only origin gate plus the Host guard remain fully in force, so no CSRF/rebinding gap.
+// URL.host is "hostname:port" with the default port (80/443) omitted — exactly how browsers set
+// BOTH the Origin and the Host header, so a genuine same-origin request compares equal.
+function isSameOriginAsHost(source: string | undefined, hostHeader: string | undefined): boolean {
+  if (!source || !hostHeader) return false;
+  try {
+    return new URL(source).host.toLowerCase() === hostHeader.trim().toLowerCase();
+  } catch {
+    return false;
+  }
+}
+
 // CORS locked to the localhost UI origins ONLY. A same-origin fetch from the UI
 // (or a tool with no Origin like curl/CLI) is allowed; any other website's
 // Origin is rejected so the browser blocks it from reading our responses.
@@ -215,6 +234,8 @@ app.use((req: Request, res: Response, next: NextFunction) => {
   // No Origin AND no Referer → trusted local caller (curl/CLI/MCP). Allow.
   if (!source) return next();
   if (isLoopbackOrigin(source)) return next();
+  // #84: on a non-loopback (opted-in network) bind, also trust the operator's own same-origin UI.
+  if (!HOST_IS_LOOPBACK && isSameOriginAsHost(source, req.headers.host)) return next();
   res.status(403).json({
     error: 'Cross-origin request rejected',
     detail: 'This local API only accepts requests from the localhost UI, curl, or the CLI. A cross-origin (foreign-website) Origin/Referer was detected and blocked to prevent CSRF/drive-by command execution.',
@@ -4718,7 +4739,10 @@ export function broadcastEvent(event: string, data: Record<string, unknown>): vo
 const MAX_SSE_CLIENTS = 64;
 app.get('/api/events', (_req: Request, res: Response) => {
   const origin = _req.get('origin');
-  if (origin && !isLoopbackOrigin(origin)) {
+  // #84: allow the operator's own same-origin UI on a non-loopback (opted-in) bind; foreign
+  // origins still fail the loopback check AND the Host match, so they remain rejected.
+  const sameOriginNetworkBind = !HOST_IS_LOOPBACK && isSameOriginAsHost(origin, _req.headers.host);
+  if (origin && !isLoopbackOrigin(origin) && !sameOriginNetworkBind) {
     res.status(403).json({
       error: 'Cross-origin event stream rejected',
       detail: 'The SSE feed may contain live mission/task/finding metadata and is only available to the localhost UI.',
