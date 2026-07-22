@@ -4506,6 +4506,22 @@
                             </p>
                         </div>
                     </div>
+
+                    <div class="card">
+                        <div class="card-header">
+                            <h3 class="card-title">📄 Run Report</h3>
+                            <button class="btn btn-sm btn-secondary" onclick="loadRunReportList()">Refresh</button>
+                        </div>
+                        <div style="display:flex; gap:10px; align-items:center; flex-wrap:wrap; padding:4px 0;">
+                            <select id="runReportSelect" style="flex:1; min-width:220px; padding:8px 10px; background:rgba(0,0,0,0.25); color:var(--text-primary,#e6e8eb); border:1px solid var(--border-color,rgba(255,255,255,0.12)); border-radius:8px;">
+                                <option value="">No runs recorded yet</option>
+                            </select>
+                            <button class="btn btn-sm btn-primary" onclick="downloadRunReport()">⬇ Download HTML</button>
+                        </div>
+                        <p id="runReportHint" style="color: var(--text-muted); font-size: 12px; margin: 8px 0 0;">
+                            Exports a self-contained HTML engagement report for one run — findings, evidence, retests, hypotheses, and work orders. Reads persisted state, so finished runs are included.
+                        </p>
+                    </div>
                 </div>
 
                 <!-- Arsenal - Sensor Deck Loadout System -->
@@ -7643,6 +7659,7 @@ Correlating findings across agents, identifying patterns, producing actionable i
             if (page === 'receipts') setTimeout(() => window.refreshReceiptsPage?.(), 50);
             if (page === 'operators' && typeof window.loadOperativesRoster === 'function') setTimeout(window.loadOperativesRoster, 80);
             if (page === 'evidence' && typeof window.hydrateFindings === 'function') setTimeout(window.hydrateFindings, 60);
+            if (page === 'evidence' && typeof window.loadRunReportList === 'function') setTimeout(window.loadRunReportList, 80);
             if (page === 'selfimprove' && typeof window.renderSelfImprove === 'function') setTimeout(window.renderSelfImprove, 60);
             if (page === 'settings' && typeof window.uacInit === 'function') setTimeout(window.uacInit, 40);
         }
@@ -8454,6 +8471,67 @@ o.id === 'coordinator' ? `1. MISSION_STATUS: Progress assessment
             a.click();
             toast('Exported', 'success');
         }
+
+        // ── Per-run engagement report (Evidence Vault → 📄 Run Report) ─────────────
+        // Populate the run picker from the backend's persisted ledgers. Options are built
+        // via DOM nodes (textContent auto-escapes) so run ids never inject markup.
+        window.loadRunReportList = async function loadRunReportList() {
+            const sel = document.getElementById('runReportSelect');
+            const hint = document.getElementById('runReportHint');
+            if (!sel) return;
+            function setOnly(text) {
+                sel.innerHTML = '';
+                const o = document.createElement('option');
+                o.value = ''; o.textContent = text;
+                sel.appendChild(o);
+            }
+            try {
+                const data = await T3MP3ST_API.get('/api/runs');
+                const runs = Array.isArray(data.runs) ? data.runs : [];
+                if (!runs.length) { setOnly('No runs recorded yet'); return; }
+                sel.innerHTML = '';
+                runs.forEach(function (r) {
+                    const o = document.createElement('option');
+                    o.value = r.missionId;
+                    const when = r.lastSeen ? new Date(r.lastSeen).toLocaleString() : 'unknown';
+                    o.textContent = r.missionId + ' — ' + (r.findingCount || 0) + ' finding(s), risk ' +
+                        String(r.riskRating || 'info').toUpperCase() + ' · ' + when;
+                    sel.appendChild(o);
+                });
+            } catch (e) {
+                setOnly('Could not load runs (backend offline?)');
+                if (hint) hint.textContent = 'Run list requires the T3MP3ST backend (npm run server).';
+            }
+        };
+
+        // Fetch the self-contained HTML report for the selected run and save it as a file.
+        window.downloadRunReport = async function downloadRunReport() {
+            const sel = document.getElementById('runReportSelect');
+            const id = sel && sel.value;
+            if (!id) { toast('Select a run first', 'warning'); return; }
+            try {
+                const base = (typeof getApiBase === 'function') ? getApiBase()
+                    : ((typeof T3MP3ST_API !== 'undefined' && T3MP3ST_API.baseUrl) || '');
+                const res = await fetch(base + '/api/runs/' + encodeURIComponent(id) + '/report');
+                if (!res.ok) {
+                    let msg = 'Report failed (' + res.status + ')';
+                    try { const j = await res.json(); if (j && j.error) msg = j.error; } catch (e) {}
+                    throw new Error(msg);
+                }
+                const html = await res.text();
+                const blob = new Blob([html], { type: 'text/html' });
+                const a = document.createElement('a');
+                a.href = URL.createObjectURL(blob);
+                a.download = 't3mp3st-report-' + String(id).replace(/[^a-zA-Z0-9._-]+/g, '_').slice(0, 80) + '.html';
+                document.body.appendChild(a);
+                a.click();
+                a.remove();
+                setTimeout(function () { URL.revokeObjectURL(a.href); }, 2000);
+                toast('Report downloaded', 'success');
+            } catch (e) {
+                toast('Report failed: ' + e.message, 'error');
+            }
+        };
 
         // Arsenal - Sensor Deck Loadout System
         let activeLoadout = [];

@@ -35,6 +35,7 @@ import { listOperatorPrompts, setOperatorOverride, resetOperatorOverride, type O
 import { ingestRepoToSourceContext, runWhiteboxAnalysis, resolveRepoSourceForAnalysis, RepoCloneError, RepoPathError } from './recon/whitebox.js';
 import { initGrammars } from './recon/ts-grammars.js';
 import { redactCredential } from './evidence/index.js';
+import { listRuns, buildRunReport, renderRunReportDocument, type RunLedgers } from './reporting/run-report.js';
 
 const execFileAsync = promisify(execFile);
 
@@ -6464,6 +6465,39 @@ app.get('/api/mission/report', (req: Request, res: Response) => handleMissionRep
 app.get('/api/mission/:id/report', (req: Request, res: Response) => handleMissionReport(req, res));
 
 /**
+ * Per-run reporting over the PERSISTED engagement ledgers. Unlike handleMissionReport
+ * (active in-memory mission only), these cover FINISHED runs too — the ledgers are
+ * hydrated from state.json on boot and are keyed by missionId.
+ */
+function snapshotRunLedgers(): RunLedgers {
+  return {
+    findings: [...findingsLedger.values()],
+    evidence: [...evidenceLedger.values()],
+    retests: [...retestLedger.values()],
+    hypotheses: [...hypothesisLedger.values()],
+    workOrders: [...workOrderLedger.values()],
+  };
+}
+
+// GET /api/runs — enumerate runs (newest activity first) for the report picker.
+app.get('/api/runs', (_req: Request, res: Response): void => {
+  res.json({ runs: listRuns(snapshotRunLedgers()) });
+});
+
+// GET /api/runs/:id/report — self-contained HTML engagement report for one run,
+// served as a download. 404 when the run has no records in the ledgers.
+app.get('/api/runs/:id/report', (req: Request, res: Response): void => {
+  const missionId = String(req.params.id || '').trim();
+  if (!missionId) { res.status(400).json({ error: 'run id required' }); return; }
+  const report = buildRunReport(missionId, snapshotRunLedgers());
+  if (!report) { res.status(404).json({ error: `no records for run ${missionId}` }); return; }
+  const safeName = (missionId.replace(/[^a-zA-Z0-9._-]+/g, '_').slice(0, 80)) || 'run';
+  res.setHeader('Content-Type', 'text/html; charset=utf-8');
+  res.setHeader('Content-Disposition', `attachment; filename="t3mp3st-report-${safeName}.html"`);
+  res.send(renderRunReportDocument(report));
+});
+
+/**
  * POST /api/mission/stop — Stop the active mission
  */
 app.post('/api/mission/stop', (_req: Request, res: Response) => {
@@ -8071,6 +8105,8 @@ async function startServer() {
     console.log('[T3MP3ST] Attack Graph (recon-generated, one renderer):');
     console.log('  POST /api/attack-graph               - Scaffold a graph for a target (varies by family)');
     console.log('  POST /api/attack-graph/ingest        - Validate a recon-supplied graph');
+    console.log('  GET  /api/runs                       - List runs from persisted ledgers (report picker)');
+    console.log('  GET  /api/runs/:id/report            - Download self-contained HTML engagement report');
     console.log('');
     console.log('[T3MP3ST] The Admiral (conversational intake):');
     console.log('  POST /api/admiral/converse           - Talk to the Admiral; it drafts the mission brief');
