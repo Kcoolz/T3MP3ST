@@ -35,6 +35,7 @@ import { listOperatorPrompts, setOperatorOverride, resetOperatorOverride, type O
 import { ingestRepoToSourceContext, runWhiteboxAnalysis, resolveRepoSourceForAnalysis, RepoCloneError, RepoPathError } from './recon/whitebox.js';
 import { initGrammars } from './recon/ts-grammars.js';
 import { redactCredential } from './evidence/index.js';
+import { deriveFindingEvidence } from './evidence/collect.js';
 import { listRuns, buildRunReport, renderRunReportDocument, type RunLedgers } from './reporting/run-report.js';
 
 const execFileAsync = promisify(execFile);
@@ -848,6 +849,11 @@ function upsertMissionFindingToLedger(finding: {
   description?: string;
   severity?: unknown;
   targetId?: string;
+  provenance?: unknown;
+  toolName?: unknown;
+  toolOutput?: unknown;
+  verifyGate?: { provenance?: unknown } | null;
+  evidence?: Array<{ type?: unknown; content?: unknown }>;
 }, missionId?: string): void {
   const title = typeof finding.title === 'string' && finding.title.trim() ? finding.title.trim() : 'Untitled finding';
   const target = normalizeTargetValue(finding.targetId);
@@ -861,36 +867,101 @@ function upsertMissionFindingToLedger(finding: {
     ? redactLedgerText(finding.description.trim())
     : 'Claim pending evidence review.';
 
+  let record: FindingRecord;
   if (existing) {
     existing.severity = severity;
     existing.claim = claim;
     if (missionId) existing.missionId = missionId;
     existing.updatedAt = now;
-    findingsLedger.set(existing.id, existing);
-    return;
+    record = existing;
+  } else {
+    record = {
+      id: newId('finding'),
+      missionId,
+      operationId: undefined,
+      family: 'web_api',
+      title: redactLedgerText(title, 240),
+      target,
+      claim,
+      impact: '',
+      severity,
+      confidence: 0.5,
+      status: 'open',
+      evidenceIds: [],
+      resourceIds: [],
+      recommendedFix: '',
+      acceptanceCriteria: [],
+      createdAt: now,
+      updatedAt: now,
+      retestIds: [],
+    };
   }
-
-  const record: FindingRecord = {
-    id: newId('finding'),
-    missionId,
-    operationId: undefined,
-    family: 'web_api',
-    title: redactLedgerText(title, 240),
-    target,
-    claim,
-    impact: '',
-    severity,
-    confidence: 0.5,
-    status: 'open',
-    evidenceIds: [],
-    resourceIds: [],
-    recommendedFix: '',
-    acceptanceCriteria: [],
-    createdAt: now,
-    updatedAt: now,
-    retestIds: [],
-  };
   findingsLedger.set(record.id, record);
+
+  // Capture the tool output that produced this finding as linked receipts. Previously the mirror
+  // wrote evidenceIds:[] for every finding and dropped the tool output entirely, so nothing could
+  // ever clear the evidence gate — real scans ran but their proof vanished, and claims permanently
+  // "outran the evidence" (the exact SITREP complaint operators kept seeing).
+  collectMissionFindingEvidence(record, finding, now);
+}
+
+/**
+ * Turn a mission finding's tool output / attached artifacts into persistent EvidenceEntry
+ * receipts linked to the finding record. HONESTY RULE: only findings the mission's own verify
+ * gate marked tool-proven get 'tool'-strength receipts (which the promotion gate accepts);
+ * model-asserted claims get at most 'context' strength and still cannot self-promote. Idempotent
+ * across re-emitted findings (deduped by type + summary) so ticking a finding never piles up
+ * duplicate receipts.
+ */
+function collectMissionFindingEvidence(
+  record: FindingRecord,
+  finding: {
+    provenance?: unknown;
+    toolName?: unknown;
+    toolOutput?: unknown;
+    verifyGate?: { provenance?: unknown } | null;
+    evidence?: Array<{ type?: unknown; content?: unknown }>;
+  },
+  now: string,
+): void {
+  const descriptors = deriveFindingEvidence(finding, redactLedgerText);
+  if (!descriptors.length) return;
+
+  // Dedupe against receipts already attached to this finding so a re-emitted finding does not
+  // pile up duplicate evidence across ticks.
+  const seen = new Set(
+    [...evidenceLedger.values()]
+      .filter(e => e.findingId === record.id)
+      .map(e => `${e.type}::${e.summary.slice(0, 160)}`),
+  );
+
+  let linked = false;
+  for (const d of descriptors) {
+    const key = `${d.type}::${d.summary.slice(0, 160)}`;
+    if (seen.has(key)) continue;
+    seen.add(key);
+    const entry: EvidenceEntry = {
+      id: newId('evidence'),
+      missionId: record.missionId,
+      operationId: record.operationId,
+      findingId: record.id,
+      type: d.type,
+      title: d.title,
+      summary: d.summary,
+      source: d.source,
+      provenanceStrength: d.strength,
+      command: d.command,
+      resourceIds: [],
+      createdAt: now,
+    };
+    evidenceLedger.set(entry.id, entry);
+    record.evidenceIds = uniqueStrings([...record.evidenceIds, entry.id]);
+    linked = true;
+  }
+  if (linked) {
+    record.updatedAt = now;
+    findingsLedger.set(record.id, record);
+  }
 }
 
 const ROUTE_SCORECARDS: Record<string, Record<string, number | string>> = {

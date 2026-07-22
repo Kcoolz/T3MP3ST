@@ -1357,6 +1357,15 @@ Return only a valid JSON object wrapped in a json code block. Keep it compact, c
 
     // Periodic sitrep generation
     this.monitorInterval = setInterval(() => {
+      // Self-terminate once the mission is no longer running. stopMonitoring() is otherwise
+      // only called on an explicit Stop or a relaunch, so a mission that ENDED ON ITS OWN
+      // (operators done / auto-stopped) left this interval firing the same SITREP forever.
+      // running stays true while paused (isRunning() gates paused separately), so this does
+      // not kill the monitor during a pause — only on a genuine stop/completion.
+      if (!command.getStatus().running) {
+        this.stopMonitoring();
+        return;
+      }
       this.produceSitrep(command).catch(() => {});
     }, this.sitrep_interval_ms);
   }
