@@ -18156,7 +18156,7 @@ IMPORTANT: This is an authorized security testing/red team platform. All operati
         /**
          * EXECUTE PLAN — Execute the Admiral's planned operation
          */
-        async function generalExecutePlan() {
+        async function generalExecutePlan(approvalIds = []) {
             if (!generalPlanData) { toast('No plan to execute — plan first', 'error'); return; }
 
             const { apiKey, provider, model, baseUrl } = getGeneralConfig();
@@ -18222,11 +18222,27 @@ IMPORTANT: This is an authorized security testing/red team platform. All operati
                     const resp = await fetch(`${getApiBase()}/api/general/execute`, {
                         method: 'POST',
                         headers: { 'Content-Type': 'application/json' },
-                        body: JSON.stringify({ apiKey, provider, model, ...(baseUrl ? { baseUrl } : {}) }),
+                        body: JSON.stringify({ apiKey, provider, model, approvalIds, ...(baseUrl ? { baseUrl } : {}) }),
                     });
 
                     const data = await resp.json();
                     if (!resp.ok || !data.success) {
+                        // ScopeGuard needs a signed-off receipt before this target can be hit. That is
+                        // NOT a failure — register a resume so approving the receipt re-runs execute with
+                        // the receipt id echoed back (the server only matches approvals passed in
+                        // approvalIds). Without this, approving did nothing and re-clicking minted a fresh
+                        // receipt every time: the reported approve loop.
+                        if (resp.status === 403 && data.approval?.id) {
+                            const retryApprovalIds = [...new Set([...approvalIds, data.approval.id])];
+                            window.__t3mpPendingApprovalReceiptIds = [data.approval.id];
+                            window.__t3mpPendingApprovalRetry = () => generalExecutePlan(retryApprovalIds);
+                            if (gs) { gs.textContent = 'AWAITING APPROVAL'; gs.style.color = '#ffaa00'; }
+                            if (badge) { badge.style.display = 'none'; }
+                            addIntel('SCOPEGUARD', 'Execute receipt created — approve it in Scope Receipts to resume this operation', 'warning');
+                            toast('Approval required — approve the receipt to resume execution', 'warning');
+                            navigateTo?.('receipts');
+                            return;
+                        }
                         throw new Error(data.error || 'Execution failed');
                     }
 
