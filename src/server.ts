@@ -6807,6 +6807,22 @@ function readGeneralTimeoutEnv(): number | undefined {
 // the key in the body, so we accept it to avoid breaking it. Moving to a header
 // needs a coordinated UI change and is out of scope. The body key is only ever
 // reachable from the local operator (loopback bind + origin guard).
+/**
+ * Resolve which connected local-agent CLI should back a mission. An explicit id from the UI
+ * (carried in `model`) always wins — that is the path Op Admiral drives today. With none
+ * supplied, read the live connectedLocalAgents registry instead of blindly assuming 'codex':
+ * prefer a connected 'codex' backbone, then any other connected agent, and only fall back to
+ * the literal 'codex' as a last resort. This keeps the codex path intact while letting a real
+ * connection (claude / hermes) drive the choice when the UI omits the id.
+ */
+function resolveConnectedAgentId(model?: string): string {
+  const requested = (model || '').trim();
+  if (requested) return requested;
+  if (connectedLocalAgents.has('codex')) return 'codex';
+  const firstConnected = connectedLocalAgents.keys().next().value;
+  return firstConnected || 'codex';
+}
+
 function resolveGeneralLLMConfig(provider: string | undefined, model: string | undefined, apiKey: string | undefined, baseUrl?: string): {
   provider: any;
   model: string;
@@ -6823,7 +6839,7 @@ function resolveGeneralLLMConfig(provider: string | undefined, model: string | u
   if (selectedProvider === 'local-agent') {
     return {
       provider: 'local-agent' as any,
-      model: model || 'codex',
+      model: resolveConnectedAgentId(model),
       maxTokens: 8192,
       temperature: 0.4,
       timeout: readGeneralTimeoutEnv()

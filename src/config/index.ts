@@ -867,6 +867,12 @@ class ConfigManager {
       case 'codex':
         actualModel = model || this.config.get('codex').defaultModel;
         break;
+      case 'local-agent':
+        // Connected local agent CLI used AS the backbone (codex | claude | hermes) — keyless,
+        // each drives its own logged-in CLI (no apiKey/baseUrl, mirroring 'codex'). The chosen
+        // agent id travels in the model field; default to the first local-agent entry ('codex').
+        actualModel = model || 'codex';
+        break;
       case 'mock':
         actualModel = 'mock-model';
         break;
@@ -981,6 +987,10 @@ class ConfigManager {
         break;
       case 'local':
         this.config.set('defaultModel', process.env.TEMPEST_LOCAL_MODEL?.trim() || 'llama3');
+        break;
+      case 'local-agent':
+        // Keyless local agent backbone — the agent id (codex|claude|hermes) is the "model".
+        this.config.set('defaultModel', 'codex');
         break;
     }
   }
